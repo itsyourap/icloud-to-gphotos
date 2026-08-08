@@ -12,6 +12,7 @@ import pytest
 
 from icloud_to_gphotos.config import Settings
 from icloud_to_gphotos.notify import (
+    encode_header,
     format_summary,
     human_bytes,
     new_run_id,
@@ -195,3 +196,78 @@ def test_new_run_id_is_sortable_and_filesystem_safe() -> None:
 
     assert run_id.endswith("Z")
     assert not set(run_id) & set('<>:"/\\|?*')
+
+
+# --- Header encoding --------------------------------------------------------
+# Regression: the run summary title contains "iCloud -> Google Photos" with a
+# U+2192 arrow. HTTP header values must be ASCII, so httpx raised
+# UnicodeEncodeError and every notification was silently lost.
+
+
+def test_ascii_header_values_are_passed_through_unchanged() -> None:
+    assert encode_header("iCloud to Google Photos: done") == "iCloud to Google Photos: done"
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (
+            "iCloud \u2192 Google Photos: done",
+            "=?UTF-8?B?aUNsb3VkIOKGkiBHb29nbGUgUGhvdG9zOiBkb25l?=",
+        ),
+        ("\u26a0 warning", "=?UTF-8?B?4pqgIHdhcm5pbmc=?="),
+    ],
+)
+def test_non_ascii_header_values_are_rfc2047_encoded(value: str, expected: str) -> None:
+    assert encode_header(value) == expected
+
+
+def test_rfc2047_encoding_round_trips() -> None:
+    """ntfy decodes the encoded-word back, so the arrow must survive."""
+    from email.header import decode_header, make_header
+
+    original = "iCloud \u2192 Google Photos: ok_with_blocked"
+
+    assert str(make_header(decode_header(encode_header(original)))) == original
+
+
+def test_encoded_headers_are_accepted_by_httpx(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The real failure was inside httpx, not our code, so build a real Request
+    from the headers we send and assert it does not raise."""
+    settings.ntfy_topic = "t"
+    captured: dict[str, object] = {}
+
+    def fake_post(url: str, content: bytes, headers: dict, timeout: float):
+        # Constructing the Request is what previously raised UnicodeEncodeError.
+        request = httpx.Request("POST", url, content=content, headers=headers)
+        captured["title"] = request.headers["Title"]
+        captured["body"] = request.content
+        return httpx.Response(200, request=request)
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+
+    sent = notify(
+        settings,
+        title="iCloud \u2192 Google Photos: done",
+        message="Deleted \u26a0 10 assets",
+        tags=["white_check_mark"],
+    )
+
+    assert sent is True
+    assert captured["title"] == "=?UTF-8?B?aUNsb3VkIOKGkiBHb29nbGUgUGhvdG9zOiBkb25l?="
+    # The body is raw UTF-8 and needs no encoding.
+    assert captured["body"] == "Deleted \u26a0 10 assets".encode()
+
+
+def test_run_summary_titles_survive_encoding() -> None:
+    """Pin the actual titles the CLI sends, so a future edit that reintroduces a
+    bare non-ASCII header is caught here."""
+    for status in ("ok", "error", "ok_with_blocked", "partial"):
+        for title in (
+            f"iCloud \u2192 Google Photos: {status}",
+            "iCloud \u2192 Google Photos: done",
+            "iCloud re-authentication needed",
+        ):
+            encode_header(title).encode("ascii")  # must not raise

@@ -6,6 +6,7 @@ successful migration run into a failed one.
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 from datetime import UTC, datetime
@@ -19,6 +20,24 @@ from .config import Settings
 LOGGER = logging.getLogger(__name__)
 
 Priority = Literal["min", "low", "default", "high", "urgent"]
+
+
+def encode_header(value: str) -> str:
+    """Make a header value safe to send, encoding non-ASCII as RFC 2047.
+
+    HTTP header values must be ASCII, so httpx raises ``UnicodeEncodeError`` on
+    anything else — which would silently cost us the notification. ntfy accepts
+    RFC 2047 encoded-words (``=?UTF-8?B?...?=``) and decodes them back, so a
+    title containing an arrow or an emoji still arrives intact.
+
+    The request body is unaffected: that is sent as raw UTF-8 bytes.
+    """
+    try:
+        value.encode("ascii")
+    except UnicodeEncodeError:
+        encoded = base64.b64encode(value.encode("utf-8")).decode("ascii")
+        return f"=?UTF-8?B?{encoded}?="
+    return value
 
 
 def write_report(settings: Settings, run_id: str, payload: dict[str, Any]) -> Path:
@@ -60,12 +79,12 @@ def notify(
 
     url = f"{settings.ntfy_server.rstrip('/')}/{settings.ntfy_topic}"
     headers = {
-        "Title": title,
+        "Title": encode_header(title),
         "Priority": priority,
         "Markdown": "yes",
     }
     if tags:
-        headers["Tags"] = ",".join(tags)
+        headers["Tags"] = encode_header(",".join(tags))
     if settings.ntfy_token:
         headers["Authorization"] = f"Bearer {settings.ntfy_token}"
 
