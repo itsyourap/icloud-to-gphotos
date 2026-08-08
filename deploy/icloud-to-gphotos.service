@@ -1,0 +1,63 @@
+[Unit]
+Description=Migrate iCloud Photos to Google Photos
+Documentation=file:///opt/icloud-to-gphotos/docs/DEPLOY_LINUX.md
+# Pointless to start without a network; does not fail the unit if offline.
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+
+# Adjust if you installed elsewhere or run as a different user.
+User=i2g
+Group=i2g
+WorkingDirectory=/opt/icloud-to-gphotos
+EnvironmentFile=/opt/icloud-to-gphotos/.env
+
+# `uv run` resolves the locked dependency set, so no activated venv is needed.
+ExecStart=/usr/local/bin/uv run --frozen i2g run
+
+# A full first pass over a large library can take many hours; only give up if it
+# has genuinely wedged.
+TimeoutStartSec=20h
+
+# Never restart automatically: a failed run has already reported itself, and
+# retrying blindly against Apple's API is how you get rate limited. The timer
+# will try again tomorrow.
+Restart=no
+
+# The pipeline is disk- and network-bound. Deprioritise it so it does not
+# starve anything else on a small VM.
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=6
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=icloud-to-gphotos
+
+# --- Hardening -------------------------------------------------------------
+# The service needs to read its checkout, write state, and reach the network.
+# Everything else is off.
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=no
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallArchitectures=native
+
+# State, staging, logs and reports live here. Must match I2G_STATE_DIR and
+# I2G_STAGING_DIR in .env.
+ReadWritePaths=/var/lib/icloud-to-gphotos
+
+[Install]
+WantedBy=multi-user.target

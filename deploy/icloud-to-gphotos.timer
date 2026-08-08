@@ -1,0 +1,25 @@
+[Unit]
+Description=Nightly iCloud to Google Photos migration at 00:00 IST
+Documentation=file:///opt/icloud-to-gphotos/docs/DEPLOY_LINUX.md
+
+[Timer]
+# 00:00 India Standard Time, stated explicitly so the schedule is correct even
+# when the VM's system clock is UTC (which it usually is).
+OnCalendar=*-*-* 00:00:00 Asia/Kolkata
+
+# Spread the start by up to 10 minutes. Every cron job in the world fires at
+# exactly midnight; a small offset is kinder to Apple's and Google's endpoints
+# and makes rate limiting less likely.
+RandomizedDelaySec=10m
+
+# If the VM was asleep or rebooted through midnight, run as soon as it is back
+# rather than skipping a whole day.
+Persistent=true
+
+# Guard against the timer firing again while a long first pass is still running.
+AccuracySec=1m
+
+Unit=icloud-to-gphotos.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,39 @@
+# Secrets and local configuration
+.env
+.env.local
+
+# Downloaded native binaries (fetch with scripts/fetch_gotohp.py)
+bin/
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# Tooling caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# Runtime state, if someone points state_dir at the checkout
+state/
+staging/
+logs/
+reports/
+*.db
+*.db-wal
+*.db-shm
+
+# Editors and OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
