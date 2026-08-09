@@ -14,8 +14,20 @@ Group=i2g
 WorkingDirectory=/opt/icloud-to-gphotos
 EnvironmentFile=/opt/icloud-to-gphotos/.env
 
-# `uv run` resolves the locked dependency set, so no activated venv is needed.
-ExecStart=/usr/local/bin/uv run --frozen i2g run
+# Call the venv's console script directly rather than going through `uv run`.
+# uv insists on writing a lock file into its cache under $HOME, which the
+# hardening below makes read-only, so `uv run` fails before the pipeline starts:
+#   error: Could not acquire lock ... Read-only file system (os error 30)
+# The script has an absolute shebang into .venv/bin/python, so it needs no
+# activation, no cache and no writable $HOME. `uv sync` at install time is what
+# keeps this venv current.
+ExecStart=/opt/icloud-to-gphotos/.venv/bin/i2g run
+
+# The project tree is read-only here, so bytecode writes would fail silently
+# anyway; skip the pointless attempts. Unbuffered output keeps `journalctl -f`
+# live during a long pass instead of arriving in blocks.
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHONUNBUFFERED=1
 
 # A full first pass over a large library can take many hours; only give up if it
 # has genuinely wedged.

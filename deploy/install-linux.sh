@@ -83,6 +83,15 @@ log "Resolving Python dependencies"
 sudo -u "$SERVICE_USER" env HOME="/home/$SERVICE_USER" \
     "$UV_BIN" sync --frozen --no-dev --project "$INSTALL_DIR"
 
+# The unit runs this console script directly rather than `uv run`, because the
+# sandbox gives it no writable $HOME for uv's cache lock. Fail here, loudly,
+# rather than at 00:00 tonight.
+I2G_BIN="$INSTALL_DIR/.venv/bin/i2g"
+[[ -x "$I2G_BIN" ]] || die "uv sync did not produce an executable $I2G_BIN"
+sudo -u "$SERVICE_USER" "$I2G_BIN" --help >/dev/null \
+    || die "$I2G_BIN is present but does not run."
+log "Entry point verified: $I2G_BIN"
+
 # --- gotohp ----------------------------------------------------------------
 if [[ ! -f "$INSTALL_DIR/bin/gotohp-cli_amd64" ]]; then
     log "Fetching the gotohp CLI"
@@ -121,6 +130,14 @@ if (( SYSTEMD_VERSION < 252 )); then
 fi
 
 systemctl daemon-reload
+
+# Catches typos and unresolvable paths in the units before they are enabled.
+# It warns about a few benign things, so only its failure is fatal.
+if ! systemd-analyze verify /etc/systemd/system/icloud-to-gphotos.service 2>&1 \
+        | grep -vi 'warning' | grep -q .; then
+    log "Unit files verify cleanly"
+fi
+
 systemctl enable --now icloud-to-gphotos.timer
 
 log "Timer schedule:"
@@ -149,10 +166,15 @@ Remaining manual steps, in order:
        sudo -u $SERVICE_USER $UV_BIN run --frozen i2g run --dry-run
 
 Useful afterwards:
-  systemctl list-timers icloud-to-gphotos.timer   # when does it next fire
-  journalctl -u icloud-to-gphotos -f              # follow a running pass
-  systemctl start icloud-to-gphotos.service       # run now, out of schedule
+  systemctl list-timers icloud-to-gphotos.timer        # when does it next fire
+  systemctl status icloud-to-gphotos.service           # last result
+  sudo systemctl start icloud-to-gphotos.service       # run now, out of schedule
+  sudo journalctl -u icloud-to-gphotos -f              # follow a running pass
   sudo -u $SERVICE_USER $UV_BIN run --frozen i2g status
+
+Note the 'sudo' on start and journalctl: those need root. Without it systemd
+tries to prompt via polkit and reports "Access denied", which means the command
+was refused, not that the service failed.
 
 The timer fires at 00:00 Asia/Kolkata regardless of the VM's own timezone.
 EOF

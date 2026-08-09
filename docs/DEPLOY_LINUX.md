@@ -76,27 +76,102 @@ To use a different time, edit the unit and reload:
 ```bash
 sudo systemctl edit icloud-to-gphotos.timer     # creates a drop-in override
 sudo systemctl daemon-reload
+sudo systemctl restart icloud-to-gphotos.timer  # pick up the new schedule
 systemctl list-timers icloud-to-gphotos.timer   # confirm the next fire time
 ```
 
 ## Day-to-day operation
 
+These are read-only and work as any user:
+
 ```bash
-systemctl list-timers icloud-to-gphotos.timer   # when does it next run
-systemctl start icloud-to-gphotos.service       # run now, off-schedule
-systemctl status icloud-to-gphotos.service      # last result
-journalctl -u icloud-to-gphotos -f              # follow a running pass
-journalctl -u icloud-to-gphotos --since today   # today's log
+systemctl list-timers icloud-to-gphotos.timer        # when does it next run
+systemctl status icloud-to-gphotos.service           # last result
+systemctl cat icloud-to-gphotos.timer                # the effective schedule
 
 cd /opt/icloud-to-gphotos
-sudo -u i2g uv run --frozen i2g status          # ledger progress, stuck items
-sudo -u i2g uv run --frozen i2g report          # last run as JSON
+sudo -u i2g uv run --frozen i2g status               # ledger progress, stuck items
+sudo -u i2g uv run --frozen i2g report               # last run as JSON
+```
+
+Starting or stopping the unit changes system state, so it needs root:
+
+```bash
+sudo systemctl start icloud-to-gphotos.service       # run now, off-schedule
+sudo systemctl stop icloud-to-gphotos.service        # cancel a running pass
+```
+
+> Without `sudo`, systemd tries to escalate through polkit and you get:
+>
+> ```
+> Failed to execute /usr/bin/pkttyagent: No such file or directory
+> Failed to start icloud-to-gphotos.service: Access denied
+> ```
+>
+> That means the command was refused, **not** that the service failed — it was
+> never invoked. Use `sudo`. (The missing `pkttyagent` is just polkit's
+> interactive prompt helper, from the `polkitd` package; installing it would let
+> bare `systemctl` ask for a password instead, but `sudo` is simpler.)
+
+Reading a unit's journal also needs privileges, unless your user is in the
+`adm` or `systemd-journal` group:
+
+```bash
+sudo journalctl -u icloud-to-gphotos -f              # follow a running pass
+sudo journalctl -u icloud-to-gphotos --since today   # today's log
 ```
 
 Per-run logs and JSON reports are also written under
 `/var/lib/icloud-to-gphotos/{logs,reports}`, kept for `I2G_LOG_RETENTION` runs
 (default 30). File logs are always DEBUG level regardless of `I2G_LOG_LEVEL`, so
 a failed unattended run leaves enough detail to diagnose afterwards.
+
+## Why the unit does not use `uv run`
+
+`ExecStart` calls `/opt/icloud-to-gphotos/.venv/bin/i2g` directly. That is
+deliberate. The hardening below (`ProtectSystem=strict`, `ProtectHome=read-only`)
+leaves only the state directory writable, and `uv run` wants to take a lock in
+its cache under `$HOME`:
+
+```
+error: Could not acquire lock
+  Caused by: Read-only file system (os error 30) at path "/home/i2g/.cache/uv/.tmpXXXX"
+```
+
+The console script has an absolute shebang into the venv's Python, so it needs
+no activation, no cache, and no writable home. `uv sync` at install time is what
+keeps the venv current — so **re-run `install-linux.sh` after pulling code
+changes**, or the service keeps running the old dependency set.
+
+If you hit this on an already-deployed VM and do not want to re-run the
+installer, override just that line:
+
+```bash
+sudo systemctl edit icloud-to-gphotos.service
+```
+
+```ini
+[Service]
+ExecStart=
+ExecStart=/opt/icloud-to-gphotos/.venv/bin/i2g run
+```
+
+The empty `ExecStart=` is required; it clears the original before setting the
+replacement.
+
+## What the sandbox allows to be written
+
+Anything the pipeline writes must be inside one of these, or the run fails:
+
+| Path | Provided by | Used for |
+| ---- | ----------- | -------- |
+| `/var/lib/icloud-to-gphotos` | `ReadWritePaths=` | ledger, cookies, staging, logs, reports |
+| `/tmp` | `PrivateTmp=yes` | exiftool argfiles (private to the unit) |
+
+Everything else is read-only, which is fine for the rest: gotohp only *reads*
+its credential file during `upload`, and Python bytecode writes are disabled
+rather than failing silently. If you move staging to another disk, add it to
+`ReadWritePaths=` — see [Sizing the VM](#sizing-the-vm).
 
 ## Sizing the VM
 
