@@ -174,15 +174,22 @@ def doctor() -> None:
     else:
         record("exiftool", True, str(exiftool))
 
-    # iCloud session
+    # iCloud session. The stored files are shown either way: re-authenticating
+    # needs a human, so it must be obvious where the trust token lives and
+    # whether a different invocation has been writing it somewhere else.
+    session_files = sorted(p.name for p in settings.cookie_dir.glob("*")) if (
+        settings.cookie_dir.exists()
+    ) else []
+    stored = ", ".join(session_files) if session_files else "no session files"
     health = session_health(settings)
     if health.get("ok"):
-        record("iCloud session", True, f"trusted, cookies in {health['cookie_dir']}")
+        record("iCloud session", True, f"trusted — {settings.cookie_dir} ({stored})")
     else:
         record(
             "iCloud session",
             False,
-            f"{health.get('reason', health)} — run `i2g login`",
+            f"{health.get('reason', health)} — run `i2g login`. "
+            f"Looking in {settings.cookie_dir} ({stored})",
         )
 
     # Disk

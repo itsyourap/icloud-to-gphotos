@@ -440,3 +440,29 @@ def test_doctor_reports_an_unrunnable_gotohp(
 
     assert result.exit_code == EXIT_FAILED
     assert "Exec format error" in result.output
+
+
+def test_doctor_shows_where_the_session_is_stored(wired: Settings) -> None:
+    """Re-authenticating needs a human, so the cookie location must be visible —
+    it is how you spot a login that wrote to a different state directory."""
+    wired.cookie_dir.mkdir(parents=True, exist_ok=True)
+    (wired.cookie_dir / "someoneexamplecom.session").write_text("{}")
+    (wired.cookie_dir / "someoneexamplecom.cookiejar").write_text("")
+
+    result = runner.invoke(app, ["doctor"])
+
+    plain = " ".join(result.output.split())
+    assert "someoneexamplecom.session" in plain
+    assert "someoneexamplecom.cookiejar" in plain
+
+
+def test_doctor_says_when_no_session_files_exist(
+    wired: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        cli_module, "session_health", lambda _s: {"ok": False, "reason": "no session"}
+    )
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert "no session files" in " ".join(result.output.split())

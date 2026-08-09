@@ -21,6 +21,51 @@ die()  { printf '\033[1;31mxx\033[0m %s\n' "$*" >&2; exit 1; }
 
 REPO_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 
+# --- Protect the iCloud session ---------------------------------------------
+# Re-authenticating iCloud needs a human and a 2FA code, so losing the trust
+# token is the most expensive thing this script could possibly do. Nothing here
+# is supposed to touch it, but "supposed to" is not a guarantee: take a copy
+# first and put anything that goes missing back, via a trap so it also runs if
+# the script dies partway.
+COOKIE_DIR="$STATE_DIR/cookies"
+COOKIE_BACKUP=""
+
+snapshot_session() {
+    [[ -d "$COOKIE_DIR" ]] || return 0
+    local count
+    count=$(find "$COOKIE_DIR" -maxdepth 1 -type f | wc -l)
+    (( count > 0 )) || return 0
+    COOKIE_BACKUP=$(mktemp -d /tmp/i2g-session-backup.XXXXXX)
+    chmod 700 "$COOKIE_BACKUP"
+    cp -a "$COOKIE_DIR/." "$COOKIE_BACKUP/"
+    log "Safeguarded $count iCloud session file(s) from $COOKIE_DIR"
+}
+
+restore_session() {
+    local status=$?
+    [[ -n "$COOKIE_BACKUP" && -d "$COOKIE_BACKUP" ]] || return $status
+
+    local restored=0 name
+    mkdir -p "$COOKIE_DIR"
+    while IFS= read -r -d '' name; do
+        if [[ ! -e "$COOKIE_DIR/$(basename "$name")" ]]; then
+            cp -a "$name" "$COOKIE_DIR/"
+            restored=$((restored + 1))
+        fi
+    done < <(find "$COOKIE_BACKUP" -maxdepth 1 -type f -print0)
+
+    if (( restored > 0 )); then
+        warn "Restored $restored iCloud session file(s) that went missing during install."
+        warn "Please report this: the installer is not supposed to remove them."
+        chown -R "$SERVICE_USER:$SERVICE_USER" "$COOKIE_DIR" 2>/dev/null || true
+    fi
+    rm -rf "$COOKIE_BACKUP"
+    return $status
+}
+
+snapshot_session
+trap restore_session EXIT
+
 # --- System packages -------------------------------------------------------
 log "Installing system packages"
 export DEBIAN_FRONTEND=noninteractive
