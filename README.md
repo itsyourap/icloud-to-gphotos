@@ -98,6 +98,8 @@ iCloud album membership, favourites, hidden status, and keywords.
 uv sync
 cp .env.example .env          # set I2G_ICLOUD_USERNAME at minimum
 uv run python scripts/fetch_gotohp.py   # builds gotohp; needs Go 1.21+
+                                        # on a <2GB VM: build elsewhere with
+                                        # --target linux and copy the binary
 
 # one-time credential setup
 ./bin/gotohp-cli_amd64 creds add '<google-photos-auth-string>'   # see docs/SETUP.md

@@ -59,6 +59,17 @@ OUTPUT_NAMES = {
     "darwin": "gotohp-cli-macos-universal",
 }
 
+#: Cross-compilation targets. The build is pure Go (CGO_ENABLED=0), so a binary
+#: for any of these can be produced from any host. This matters because the
+#: build peaks around 700 MiB of RSS, which a 1 GB VM cannot survive — build on
+#: a workstation and copy the result across instead.
+CROSS_TARGETS = {
+    "linux": ("linux", "amd64", "gotohp-cli_amd64"),
+    "linux-arm64": ("linux", "arm64", "gotohp-cli_amd64"),
+    "windows": ("windows", "amd64", "gotohp-cli-x64.exe"),
+    "macos": ("darwin", "arm64", "gotohp-cli-macos-universal"),
+}
+
 #: The upstream CI build flags (.github/workflows/build.yml). CGO_ENABLED=0
 #: keeps it pure Go, so it also cross-compiles.
 BUILD_FLAGS = ["-tags", "cli", "-trimpath", "-buildvcs=false", "-ldflags", "-w -s"]
@@ -127,8 +138,15 @@ def download_source(ref: str, into: Path) -> Path:
     return roots[0]
 
 
-def build(ref: str, target: Path) -> None:
-    """Build the gotohp CLI at ``ref`` and place the binary at ``target``."""
+def build(ref: str, target: Path, goos: str | None = None, goarch: str | None = None) -> None:
+    """Build the gotohp CLI at ``ref`` and place the binary at ``target``.
+
+    Args:
+        ref: Git ref to build.
+        target: Output path for the binary.
+        goos: Cross-compilation OS, or None to build for the host.
+        goarch: Cross-compilation architecture, or None for the host.
+    """
     go = shutil.which("go")
     if go is None:
         raise SystemExit(
@@ -151,8 +169,13 @@ def build(ref: str, target: Path) -> None:
     with tempfile.TemporaryDirectory(prefix="gotohp-build-") as tmp:
         source = download_source(ref, Path(tmp))
         target.parent.mkdir(parents=True, exist_ok=True)
-        print(f"Building with {go} (this downloads Go modules on first run) ...")
         env = {**os.environ, "CGO_ENABLED": "0"}
+        if goos:
+            env["GOOS"] = goos
+            env["GOARCH"] = goarch or "amd64"
+            print(f"Cross-compiling for {env['GOOS']}/{env['GOARCH']} with {go} ...")
+        else:
+            print(f"Building with {go} (this downloads Go modules on first run) ...")
         completed = subprocess.run(
             [go, "build", *BUILD_FLAGS, "-o", str(target), "."],
             cwd=source,
@@ -230,12 +253,39 @@ def main() -> int:
         help="Download a published release instead of building. Latest if no tag.",
     )
     parser.add_argument(
+        "--target",
+        choices=sorted(CROSS_TARGETS),
+        help=(
+            "Cross-compile for another platform instead of this one. Use this to "
+            "build on a workstation for a small VM: the build peaks near 700 MiB "
+            "of RSS, which a 1 GB host cannot survive."
+        ),
+    )
+    parser.add_argument(
         "--dest",
         type=Path,
         default=Path(__file__).resolve().parents[1] / "bin",
         help="Destination directory (default: ./bin).",
     )
     args = parser.parse_args()
+
+    if args.target and args.release is not None:
+        parser.error("--target cannot be combined with --release")
+
+    if args.target:
+        goos, goarch, name = CROSS_TARGETS[args.target]
+        target = args.dest / name
+        build(args.ref, target, goos=goos, goarch=goarch)
+        make_executable(target)
+        # A foreign binary cannot be probed here, so state plainly what is left
+        # to check rather than implying it has been verified.
+        print(f"\nSaved to {target}  ({goos}/{goarch})")
+        print("\nCopy it to the VM and verify there:")
+        print(f"  scp {target} <vm>:/opt/icloud-to-gphotos/bin/")
+        print("  ssh <vm> 'sudo chown i2g:i2g /opt/icloud-to-gphotos/bin/* && "
+              "sudo chmod +x /opt/icloud-to-gphotos/bin/*'")
+        print("  ssh <vm> 'sudo ./opt/icloud-to-gphotos/deploy/install-linux.sh'")
+        return 0
 
     target = args.dest / OUTPUT_NAMES[platform_key()]
 

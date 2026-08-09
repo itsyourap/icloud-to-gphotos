@@ -87,6 +87,42 @@ plain download — the script refuses it if the flags are still missing:
 uv run python scripts/fetch_gotohp.py --release
 ```
 
+### Small VMs: build elsewhere and copy the binary
+
+The build peaks around **700 MiB of resident memory** (measured). A 1 vCPU /
+1 GB VM does not fail cleanly on that — it thrashes and looks like a hang. The
+installer checks available memory + swap and refuses up front rather than
+letting you wait.
+
+The build is pure Go (`CGO_ENABLED=0`), so cross-compiling is trivial. Build on
+a workstation and copy the result over:
+
+```bash
+# on your workstation, in the project checkout
+uv run python scripts/fetch_gotohp.py --target linux
+scp bin/gotohp-cli_amd64 you@your-vm:/tmp/
+
+# on the VM
+sudo install -o i2g -g i2g -m 755 \
+    /tmp/gotohp-cli_amd64 /opt/icloud-to-gphotos/bin/gotohp-cli_amd64
+sudo ./deploy/install-linux.sh    # detects the binary, skips Go entirely
+```
+
+The result is a statically linked ELF with no libc dependency, so it runs on
+any x86-64 Linux regardless of distro. `--target` also accepts `linux-arm64`,
+`windows`, and `macos`.
+
+If you would rather build on the VM, give it swap first:
+
+```bash
+sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile
+sudo mkswap /swapfile && sudo swapon /swapfile
+echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab   # keep it on reboot
+```
+
+Expect several minutes of disk churn. Override the memory check with
+`I2G_ALLOW_LOW_MEM_BUILD=1` if you want to try without swap.
+
 ### Get the credential string
 
 Follow the upstream instructions, which are authoritative and kept current:

@@ -152,6 +152,54 @@ elif [[ -e "$GOTOHP_BIN" ]]; then
 fi
 
 if (( needs_gotohp )); then
+    # The build peaks near 700 MiB RSS (measured). A 1 GB VM without swap does
+    # not OOM cleanly, it thrashes and appears to hang, so refuse up front and
+    # point at cross-compilation instead of letting the operator wait.
+    MEM_AVAIL_MB=$(awk '/^MemAvailable:/ {print int($2/1024)}' /proc/meminfo)
+    SWAP_MB=$(awk '/^SwapTotal:/ {print int($2/1024)}' /proc/meminfo)
+    BUILD_BUDGET_MB=$(( MEM_AVAIL_MB + SWAP_MB ))
+    MIN_BUILD_MB=${MIN_BUILD_MB:-1400}
+
+    if (( BUILD_BUDGET_MB < MIN_BUILD_MB )) && [[ -z "${I2G_ALLOW_LOW_MEM_BUILD:-}" ]]; then
+        cat >&2 <<EOF
+$(warn "Not enough memory to build gotohp here.")
+    available RAM : ${MEM_AVAIL_MB} MiB
+    swap          : ${SWAP_MB} MiB
+    needed        : ~${MIN_BUILD_MB} MiB (the build peaks around 700 MiB)
+
+Building here would thrash and appear to hang. Two ways forward:
+
+ 1. Cross-compile on a workstation that has Go, then copy the binary over.
+    This is the recommended route and takes about a minute:
+
+        # on your workstation, in the project checkout
+        uv run python scripts/fetch_gotohp.py --target linux
+        scp bin/gotohp-cli_amd64 $(id -un)@<this-host>:/tmp/
+
+        # back here
+        sudo install -o $SERVICE_USER -g $SERVICE_USER -m 755 \\
+            /tmp/gotohp-cli_amd64 $INSTALL_DIR/bin/gotohp-cli_amd64
+        sudo $0
+
+    The installer skips the build entirely when a usable binary is present.
+
+ 2. Add swap and build here anyway (slow, several minutes of disk churn):
+
+        sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile
+        sudo mkswap /swapfile && sudo swapon /swapfile
+        sudo $0
+
+    Add '/swapfile none swap sw 0 0' to /etc/fstab to keep it across reboots.
+
+To override this check anyway, re-run with I2G_ALLOW_LOW_MEM_BUILD=1.
+EOF
+        exit 1
+    fi
+
+    if (( BUILD_BUDGET_MB < MIN_BUILD_MB )); then
+        warn "Low memory (${BUILD_BUDGET_MB} MiB) but I2G_ALLOW_LOW_MEM_BUILD is set; building anyway."
+    fi
+
     GO_BIN=$(command -v go || true)
     GO_OK=0
     if [[ -n "$GO_BIN" ]]; then

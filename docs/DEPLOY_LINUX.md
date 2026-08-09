@@ -180,6 +180,14 @@ rather than failing silently. If you move staging to another disk, add it to
 
 ## Sizing the VM
 
+**A 1 GB VM cannot build gotohp.** The build peaks near 700 MiB of RSS, so on
+1 vCPU / 1 GB it thrashes rather than completing. Cross-compile on a workstation
+and copy the binary over — see
+[SETUP.md § Small VMs](SETUP.md#small-vms-build-elsewhere-and-copy-the-binary).
+The installer detects this and refuses to build rather than hanging. Running the
+migration itself is undemanding; only the build is heavy.
+
+
 **Disk is the only real constraint, and it does not scale with library size.**
 Work happens in batches capped by `I2G_BATCH_MAX_BYTES` (20 GiB default) and
 staging is wiped between them, so a 2 TB library migrates on a 40 GB disk — it
