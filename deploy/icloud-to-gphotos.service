@@ -71,5 +71,13 @@ SystemCallArchitectures=native
 # I2G_STAGING_DIR in .env.
 ReadWritePaths=/var/lib/icloud-to-gphotos
 
-[Install]
-WantedBy=multi-user.target
+# Deliberately no [Install] section.
+#
+# This service exists only to be triggered by icloud-to-gphotos.timer, so it
+# must not be enableable. With WantedBy=multi-user.target, `systemctl enable`
+# would wire it into boot and start a full migration every time the VM comes
+# up — on top of the nightly run.
+#
+# `systemctl status` reporting the service as "disabled" is therefore correct
+# and expected. The timer is the unit that gets enabled; check that instead:
+#     systemctl list-timers icloud-to-gphotos.timer

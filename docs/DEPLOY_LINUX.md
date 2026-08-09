@@ -87,6 +87,22 @@ systemctl list-timers icloud-to-gphotos.timer   # confirm the next fire time
 
 ## Day-to-day operation
 
+> **The service is meant to show as `disabled`.** Only the *timer* is enabled.
+> "Enabled" for a service means "start at boot", and you do not want a full
+> migration every time the VM reboots. `systemctl status` on the service
+> confirms the wiring on the `TriggeredBy:` line:
+>
+> ```text
+> Loaded: loaded (...; disabled; preset: enabled)
+> TriggeredBy: * icloud-to-gphotos.timer
+> ```
+>
+> To check the schedule is live, look at the timer, not the service:
+> `systemctl list-timers icloud-to-gphotos.timer`.
+>
+> The service deliberately has no `[Install]` section, so `systemctl enable` on
+> it will refuse — that is the safeguard, not a problem.
+
 These are read-only and work as any user:
 
 ```bash

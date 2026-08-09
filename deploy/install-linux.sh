@@ -267,6 +267,16 @@ if (( SYSTEMD_VERSION < 252 )); then
         > /etc/systemd/system/icloud-to-gphotos.timer.d/timezone-note.conf
 fi
 
+# Earlier versions shipped an [Install] section on the service by mistake, so a
+# host where it was ever enabled still has a boot-time symlink. Removing the
+# section does not remove the symlink, so clear it explicitly: otherwise a full
+# migration would start on every reboot, on top of the nightly run.
+if [[ -e /etc/systemd/system/multi-user.target.wants/icloud-to-gphotos.service ]]; then
+    warn "Removing stale boot-time enablement of the service (the timer triggers it)."
+    systemctl disable icloud-to-gphotos.service >/dev/null 2>&1 || true
+    rm -f /etc/systemd/system/multi-user.target.wants/icloud-to-gphotos.service
+fi
+
 systemctl daemon-reload
 
 # Catches typos and unresolvable paths in the units before they are enabled.
