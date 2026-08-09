@@ -47,19 +47,45 @@ The alternative (Google's official Photos Library API) needs a GCP project, coun
 uploads against your quota, and — in Testing mode — expires refresh tokens every
 7 days, which breaks unattended runs.
 
-### Get the CLI
+### Get the CLI — it must be built, not downloaded
 
 ```bash
 uv run python scripts/fetch_gotohp.py
 ```
 
-This downloads the correct release binary for your platform into `./bin`:
+This **builds** gotohp from a pinned commit into `./bin`. It needs Go 1.21+ on
+`PATH` (`winget install GoLang.Go`, `brew install go`, or <https://go.dev/dl/>;
+`deploy/install-linux.sh` installs it for you).
 
-| Platform | Asset |
-| -------- | ----- |
-| Linux    | `gotohp-cli_amd64` |
-| Windows  | `gotohp-cli-x64.exe` |
-| macOS    | `gotohp-cli-macos-universal` |
+> **Why not the published release?** gotohp's latest release, v0.8.1, predates
+> two commits this project depends on:
+>
+> - `--no-tui` (headless uploads). Without it, bubbletea opens `/dev/tty` for
+>   input. A systemd service has no controlling terminal, so this fails with
+>   `could not open a new TTY: open /dev/tty: no such device or address` — after
+>   the whole batch has already been downloaded.
+> - `--pair-live-photos`. Without it, a Live Photo's HEIC and MOV arrive in
+>   Google Photos as two unrelated items.
+>
+> gotohp **ignores unknown flags** rather than rejecting them, and builds from
+> `main` still report `v0.8.1`, so neither behaviour nor `version` reveals which
+> one you have. The build script and `i2g doctor` both probe
+> `upload --help` for the flags instead.
+
+Output per platform:
+
+| Platform | Binary |
+| -------- | ------ |
+| Linux    | `bin/gotohp-cli_amd64` |
+| Windows  | `bin/gotohp-cli-x64.exe` |
+| macOS    | `bin/gotohp-cli-macos-universal` |
+
+If a future gotohp release includes both features, you can switch back to a
+plain download — the script refuses it if the flags are still missing:
+
+```bash
+uv run python scripts/fetch_gotohp.py --release
+```
 
 ### Get the credential string
 
@@ -222,9 +248,16 @@ I2G_NOTIFY_ON_SUCCESS=false
 
 ## Troubleshooting
 
+**`doctor` says "gotohp capabilities: missing --no-tui ..."**
+You have the published v0.8.1 release, which cannot run headlessly. Rebuild it:
+`uv run python scripts/fetch_gotohp.py`. Symptom if you skip this: the run
+downloads a whole batch, then every file fails with
+`error running TUI: could not open a new TTY`.
+
 **`doctor` says "gotohp CLI not found"**
-Run `uv run python scripts/fetch_gotohp.py`, or set `I2G_GOTOHP_BINARY` to its
-path. On Linux, check it is executable: `chmod +x bin/gotohp-cli_amd64`.
+Run `uv run python scripts/fetch_gotohp.py` (this builds it; needs Go 1.21+),
+or set `I2G_GOTOHP_BINARY` to its path. On Linux, check it is executable:
+`chmod +x bin/gotohp-cli_amd64`.
 
 **`doctor` says "no credentials stored"**
 `creds add` was run as a different user than the one running the pipeline. Re-run

@@ -92,14 +92,59 @@ sudo -u "$SERVICE_USER" "$I2G_BIN" --help >/dev/null \
     || die "$I2G_BIN is present but does not run."
 log "Entry point verified: $I2G_BIN"
 
-# --- gotohp ----------------------------------------------------------------
-if [[ ! -f "$INSTALL_DIR/bin/gotohp-cli_amd64" ]]; then
-    log "Fetching the gotohp CLI"
-    sudo -u "$SERVICE_USER" env HOME="/home/$SERVICE_USER" \
+# --- Go, needed to build gotohp ---------------------------------------------
+# The published gotohp release predates headless uploads and Live Photo
+# pairing, so it must be built from a pinned commit. Its go.mod asks for a
+# toolchain far newer than Debian packages, and only Go 1.21+ can fetch that
+# automatically, so install upstream Go rather than golang-go.
+GOTOHP_BIN="$INSTALL_DIR/bin/gotohp-cli_amd64"
+needs_gotohp=1
+if [[ -x "$GOTOHP_BIN" ]] && "$GOTOHP_BIN" upload --help 2>&1 | grep -q -- "--no-tui"; then
+    needs_gotohp=0
+    log "Existing gotohp binary supports headless uploads; keeping it"
+elif [[ -e "$GOTOHP_BIN" ]]; then
+    warn "Existing gotohp binary is too old (no --no-tui); rebuilding"
+fi
+
+if (( needs_gotohp )); then
+    GO_BIN=$(command -v go || true)
+    GO_OK=0
+    if [[ -n "$GO_BIN" ]]; then
+        GO_MAJOR_MINOR=$("$GO_BIN" version | grep -oE 'go[0-9]+\.[0-9]+' | head -1 | tr -d 'go')
+        if [[ -n "$GO_MAJOR_MINOR" ]] && \
+           [[ "$(printf '%s\n1.21\n' "$GO_MAJOR_MINOR" | sort -V | head -1)" == "1.21" ]]; then
+            GO_OK=1
+        fi
+    fi
+
+    if (( ! GO_OK )); then
+        GO_VERSION=${GO_VERSION:-1.26.5}
+        log "Installing Go $GO_VERSION to /usr/local/go"
+        GO_TARBALL="go${GO_VERSION}.linux-amd64.tar.gz"
+        curl -fsSL "https://go.dev/dl/${GO_TARBALL}" -o "/tmp/${GO_TARBALL}"
+        rm -rf /usr/local/go
+        tar -C /usr/local -xzf "/tmp/${GO_TARBALL}"
+        rm -f "/tmp/${GO_TARBALL}"
+        GO_BIN=/usr/local/go/bin/go
+        # Make it available to future logins as well as this script.
+        printf 'export PATH=$PATH:/usr/local/go/bin\n' > /etc/profile.d/go.sh
+    fi
+    export PATH="$(dirname "$GO_BIN"):$PATH"
+    log "Using $("$GO_BIN" version)"
+
+    log "Building the gotohp CLI (first build downloads Go modules)"
+    sudo -u "$SERVICE_USER" env HOME="/home/$SERVICE_USER" PATH="$PATH" \
         "$UV_BIN" run --project "$INSTALL_DIR" \
-        python "$INSTALL_DIR/scripts/fetch_gotohp.py"
+        python "$INSTALL_DIR/scripts/fetch_gotohp.py" \
+        || die "Could not build the gotohp CLI."
 fi
 chmod +x "$INSTALL_DIR"/bin/gotohp-cli* 2>/dev/null || true
+
+# Re-check rather than trusting the build step, since a stale binary left by an
+# earlier install would otherwise only fail at 00:00.
+"$GOTOHP_BIN" upload --help 2>&1 | grep -q -- "--no-tui" \
+    || die "$GOTOHP_BIN still does not support --no-tui; it cannot run under systemd."
+log "gotohp verified: supports headless uploads and Live Photo pairing"
 
 # --- systemd ---------------------------------------------------------------
 log "Installing systemd units"

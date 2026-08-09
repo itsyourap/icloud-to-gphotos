@@ -19,6 +19,7 @@ from icloud_to_gphotos.config import Settings
 from icloud_to_gphotos.icloud_client import ReauthRequired
 from icloud_to_gphotos.ledger import Ledger
 from icloud_to_gphotos.pipeline import RunResult
+from icloud_to_gphotos.uploader import UploadError
 
 runner = CliRunner()
 
@@ -32,6 +33,7 @@ def wired(settings: Settings, monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     monkeypatch.setattr(cli_module, "find_gotohp", lambda _: binary)
     monkeypatch.setattr(cli_module, "find_exiftool", lambda _: tmp_path / "exiftool")
     monkeypatch.setattr(cli_module, "check_credentials", lambda *_a, **_k: (True, "me@gmail.com"))
+    monkeypatch.setattr(cli_module, "missing_upload_flags", lambda *_a, **_k: [])
     monkeypatch.setattr(
         cli_module, "session_health", lambda _s: {"ok": True, "cookie_dir": str(tmp_path)}
     )
@@ -408,3 +410,33 @@ def test_login_prompts_for_the_password_when_omitted(
     assert result.exit_code == EXIT_OK
     assert captured["password"] == "typed-password"
     assert captured["code"] == "654321"
+
+
+def test_doctor_fails_when_gotohp_lacks_headless_support(
+    wired: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The published v0.8.1 release cannot run under systemd. doctor has to say
+    so, since the binary is present and its credentials check out."""
+    monkeypatch.setattr(
+        cli_module, "missing_upload_flags", lambda *_a, **_k: ["--no-tui", "--pair-live-photos"]
+    )
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert result.exit_code == EXIT_FAILED
+    assert "no-tui" in result.output
+    assert "fetch_gotohp" in result.output
+
+
+def test_doctor_reports_an_unrunnable_gotohp(
+    wired: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def boom(*_a, **_k):
+        raise UploadError("Could not execute gotohp: Exec format error")
+
+    monkeypatch.setattr(cli_module, "missing_upload_flags", boom)
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert result.exit_code == EXIT_FAILED
+    assert "Exec format error" in result.output

@@ -26,7 +26,7 @@ from .icloud_client import ReauthRequired, connect, interactive_login, session_h
 from .ledger import Ledger
 from .metadata import find_exiftool
 from .pipeline import Pipeline
-from .uploader import check_credentials
+from .uploader import UploadError, check_credentials, missing_upload_flags
 
 app = typer.Typer(
     name="i2g",
@@ -135,6 +135,24 @@ def doctor() -> None:
         )
     else:
         record("gotohp CLI", True, str(gotohp))
+        # The published release silently ignores the flags this project needs,
+        # so probe for them rather than trusting the binary's presence.
+        try:
+            missing = missing_upload_flags(gotohp)
+        except UploadError as exc:
+            record("gotohp capabilities", False, str(exc))
+        else:
+            record(
+                "gotohp capabilities",
+                not missing,
+                "headless upload and Live Photo pairing supported"
+                if not missing
+                else (
+                    f"missing {', '.join(missing)} — this is the published v0.8.1 "
+                    "release, which cannot run under systemd. Rebuild with "
+                    "`python scripts/fetch_gotohp.py`."
+                ),
+            )
         ok, detail = check_credentials(gotohp, settings.gotohp_config)
         record("Google Photos creds", ok, detail)
         if settings.gotohp_config is None and (implied := default_gotohp_config()):

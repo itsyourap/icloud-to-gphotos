@@ -16,7 +16,14 @@ from pathlib import Path
 import pytest
 
 from icloud_to_gphotos import uploader
-from icloud_to_gphotos.uploader import UploadError, check_credentials, upload_directory
+from icloud_to_gphotos.uploader import (
+    IncompatibleGotohp,
+    UploadError,
+    check_credentials,
+    missing_upload_flags,
+    upload_directory,
+    verify_compatible,
+)
 
 SUMMARY = {
     "total": 1,
@@ -256,3 +263,108 @@ def test_real_subprocess_without_a_summary_raises(tmp_path: Path) -> None:
 
     with pytest.raises(UploadError, match="no credentials"):
         upload_directory(staging, binary=launcher, threads=1, pair_live_photos=False)
+
+
+# --- Capability detection ---------------------------------------------------
+# Regression: the published v0.8.1 release has neither --no-tui nor
+# --pair-live-photos. It ignores unknown flags instead of failing, and builds
+# from main still report "v0.8.1", so the only reliable signal is the help text.
+# Without --no-tui, bubbletea opens /dev/tty, which under systemd fails with
+# ENXIO and loses the entire downloaded batch.
+
+HELP_MODERN = """Usage: gotohp-cli upload <path> [<path> ...] [flags]
+
+Flags:
+  -r, --recursive              Include subdirectories
+  -t, --threads <n>            Number of upload threads (default: 3)
+      --pair-live-photos       Pair Apple Live Photo files
+      --upload-incomplete-live-photos  Upload an unmatched member as a single file
+      --ignore-apple-metadata  Match by filename stem
+      --no-tui                 Disable the interactive progress UI
+"""
+
+HELP_V081 = """Usage: gotohp-cli upload <path> [<path> ...] [flags]
+
+Flags:
+  -r, --recursive              Include subdirectories
+  -t, --threads <n>            Number of upload threads (default: 3)
+  -f, --force                  Force upload even if file exists
+  -a, --album <name>           Add to album
+"""
+
+
+def test_modern_binary_reports_no_missing_flags(recorded_run) -> None:
+    recorded_run(stdout=HELP_MODERN)
+
+    assert missing_upload_flags(Path("gotohp")) == []
+
+
+def test_v081_release_is_detected_as_incompatible(recorded_run) -> None:
+    recorded_run(stdout=HELP_V081)
+
+    missing = missing_upload_flags(Path("gotohp"))
+
+    assert "--no-tui" in missing
+    assert "--pair-live-photos" in missing
+
+
+def test_verify_compatible_passes_for_a_modern_binary(recorded_run) -> None:
+    recorded_run(stdout=HELP_MODERN)
+
+    verify_compatible(Path("gotohp"))  # must not raise
+
+
+def test_verify_compatible_raises_with_actionable_guidance(recorded_run) -> None:
+    recorded_run(stdout=HELP_V081)
+
+    with pytest.raises(IncompatibleGotohp) as excinfo:
+        verify_compatible(Path("gotohp"))
+
+    message = str(excinfo.value)
+    assert "--no-tui" in message
+    assert "fetch_gotohp.py" in message
+
+
+def test_help_on_stderr_is_also_read(recorded_run) -> None:
+    """Some CLIs print usage to stderr; the probe must not depend on stdout."""
+    recorded_run(stdout="", stderr=HELP_MODERN)
+
+    assert missing_upload_flags(Path("gotohp")) == []
+
+
+def test_unreadable_help_raises_rather_than_assuming_compatible(recorded_run) -> None:
+    """Assuming success here would let an unusable binary through."""
+    recorded_run(stdout="", stderr="segmentation fault", returncode=139)
+
+    with pytest.raises(UploadError, match="Could not read"):
+        missing_upload_flags(Path("gotohp"))
+
+
+def test_missing_binary_raises(tmp_path: Path) -> None:
+    with pytest.raises(UploadError, match="not found"):
+        missing_upload_flags(tmp_path / "nope")
+
+
+def test_real_v081_help_text_is_rejected(tmp_path: Path) -> None:
+    """Guards the exact help text of the published release, captured verbatim
+    from `gotohp-cli upload --help` at v0.8.1."""
+    body = (
+        "import sys\n"
+        "print('''Usage: gotohp-cli upload <path> [<path> ...] [flags]\n"
+        "\n"
+        "Flags:\n"
+        "  -r, --recursive              Include subdirectories\n"
+        "  -t, --threads <n>            Number of upload threads (default: 3)\n"
+        "  -f, --force                  Force upload even if file exists\n"
+        "  -d, --delete                 Delete local files after upload\n"
+        "  -df, --disable-filter        Allow unsupported file types\n"
+        "      --date-from-filename     Parse date from filename\n"
+        "  -e, --exclude <pattern>      Exclude directories\n"
+        "  -l, --log-level <level>      Log level\n"
+        "  -c, --config <path>          Config path\n"
+        "  -a, --album <name>           Add to album''')\n"
+    )
+    launcher = _write_launcher(tmp_path, body)
+
+    with pytest.raises(IncompatibleGotohp, match="--no-tui"):
+        verify_compatible(launcher)

@@ -36,7 +36,7 @@ from .downloader import download_batch, resource_path
 from .icloud_client import ICloudSession
 from .ledger import Ledger
 from .metadata import MetadataReport, backfill_batch, find_exiftool
-from .uploader import UploadError, UploadReport, upload_directory
+from .uploader import UploadError, UploadReport, upload_directory, verify_compatible
 
 LOGGER = logging.getLogger(__name__)
 
@@ -159,6 +159,19 @@ class Pipeline:
             )
             result.duration_seconds = time.monotonic() - started
             return result
+
+        # Checked before any download: an unusable gotohp would otherwise only
+        # surface after a whole batch has been fetched, wasting the bandwidth
+        # and leaving every file recorded as failed.
+        if not self.dry_run:
+            try:
+                verify_compatible(self.gotohp)
+            except UploadError as exc:
+                result.status = "error"
+                result.errors.append(str(exc))
+                LOGGER.error("%s", exc)
+                result.duration_seconds = time.monotonic() - started
+                return result
 
         if self.exiftool is None and self.settings.backfill_metadata:
             LOGGER.warning(

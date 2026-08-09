@@ -22,9 +22,31 @@ SUCCESSFUL_SKIP_CODES = frozenset(
     {"remote-duplicate", "remote-live-photo-component-exists"}
 )
 
+#: Flags this project depends on that do not exist in the v0.8.1 release.
+#:
+#: gotohp ignores unknown flags rather than rejecting them, and `version` still
+#: reports "v0.8.1" on builds from main, so neither the exit code nor the
+#: version string can tell an adequate binary from an inadequate one. Probing
+#: `upload --help` is the only reliable signal.
+#:
+#: Without --no-tui, bubbletea opens /dev/tty for input. A systemd service has
+#: no controlling terminal, so that fails with ENXIO and the whole batch is
+#: lost after being downloaded:
+#:     error running TUI: could not open a new TTY:
+#:     open /dev/tty: no such device or address
+REQUIRED_UPLOAD_FLAGS: tuple[str, ...] = (
+    "--no-tui",
+    "--pair-live-photos",
+    "--upload-incomplete-live-photos",
+)
+
 
 class UploadError(RuntimeError):
     """gotohp could not be run, or produced no parseable summary."""
+
+
+class IncompatibleGotohp(UploadError):
+    """The gotohp binary is too old to be driven headlessly."""
 
 
 @dataclass(slots=True)
@@ -256,6 +278,56 @@ def upload_directory(
         len(report.uploaded_filenames),
     )
     return report
+
+
+def missing_upload_flags(binary: Path, timeout: int = 60) -> list[str]:
+    """Return the required upload flags this binary does not support.
+
+    Raises:
+        UploadError: if the binary cannot be run or its help cannot be read.
+    """
+    try:
+        completed = subprocess.run(
+            [str(binary), "upload", "--help"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+            check=False,
+        )
+    except FileNotFoundError as exc:
+        raise UploadError(f"gotohp binary not found at {binary}") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise UploadError(f"gotohp upload --help timed out after {timeout}s") from exc
+    except OSError as exc:
+        # Not executable, wrong architecture, or not a valid binary at all.
+        raise UploadError(f"Could not execute {binary}: {exc}") from exc
+
+    help_text = f"{completed.stdout}\n{completed.stderr}"
+    if "upload" not in help_text.lower():
+        raise UploadError(
+            f"Could not read `gotohp upload --help` (exit {completed.returncode}): "
+            f"{help_text.strip()[:300]}"
+        )
+    return [flag for flag in REQUIRED_UPLOAD_FLAGS if flag not in help_text]
+
+
+def verify_compatible(binary: Path) -> None:
+    """Raise :class:`IncompatibleGotohp` if the binary cannot be driven headlessly.
+
+    Called before any download work, so an unusable binary costs nothing rather
+    than being discovered after gigabytes have been fetched.
+    """
+    missing = missing_upload_flags(binary)
+    if not missing:
+        return
+    raise IncompatibleGotohp(
+        f"{binary} does not support {', '.join(missing)}. The published v0.8.1 "
+        "release predates headless uploads and Live Photo pairing, and it "
+        "ignores unknown flags instead of failing, so it cannot be used here. "
+        "Rebuild it with `python scripts/fetch_gotohp.py` (see docs/SETUP.md)."
+    )
 
 
 def check_credentials(binary: Path, config_path: Path | None = None) -> tuple[bool, str]:

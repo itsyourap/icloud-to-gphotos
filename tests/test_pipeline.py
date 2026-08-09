@@ -19,7 +19,7 @@ from icloud_to_gphotos import pipeline as pipeline_module
 from icloud_to_gphotos.config import Settings
 from icloud_to_gphotos.ledger import MAX_UPLOAD_ATTEMPTS, Ledger
 from icloud_to_gphotos.pipeline import Pipeline
-from icloud_to_gphotos.uploader import UploadError, UploadReport
+from icloud_to_gphotos.uploader import IncompatibleGotohp, UploadError, UploadReport
 
 from .conftest import (
     DEFAULT_PAYLOAD,
@@ -136,6 +136,10 @@ def make_pipeline(settings: Settings, tmp_path: Path, monkeypatch: pytest.Monkey
         binary.write_text("#!/bin/sh")
         monkeypatch.setattr(pipeline_module, "find_gotohp", lambda _: binary)
         monkeypatch.setattr(pipeline_module, "find_exiftool", lambda _: None)
+        # The dummy binary above cannot be executed, and these tests exercise
+        # pipeline logic rather than the probe. Tests that care about the
+        # compatibility gate override this again.
+        monkeypatch.setattr(pipeline_module, "verify_compatible", lambda _b: None)
 
         session = FakeICloudSession(assets)
         if ledger is None:
@@ -624,3 +628,72 @@ def test_asset_dates_far_in_the_future_are_not_deleted(make_pipeline) -> None:
     assert result.totals.uploaded == 1
     assert asset.delete_calls == 0
     assert result.totals.skipped_recent == 1
+
+
+# --- gotohp compatibility gate ---------------------------------------------
+
+
+def test_incompatible_gotohp_aborts_before_downloading(
+    settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The v0.8.1 release cannot upload headlessly. Discovering that after a
+    batch has been fetched wastes the bandwidth and marks every file failed, so
+    the check must happen first."""
+    binary = tmp_path / "gotohp-cli"
+    binary.write_text("#!/bin/sh")
+    monkeypatch.setattr(pipeline_module, "find_gotohp", lambda _: binary)
+    monkeypatch.setattr(pipeline_module, "find_exiftool", lambda _: None)
+
+    def incompatible(_binary):
+        raise IncompatibleGotohp("gotohp does not support --no-tui")
+
+    monkeypatch.setattr(pipeline_module, "verify_compatible", incompatible)
+    downloaded: list[object] = []
+    monkeypatch.setattr(
+        pipeline_module, "download_batch", lambda *a, **k: downloaded.append(a)
+    )
+
+    asset = FakePhotoAsset("a1", filename="IMG_1.HEIC", asset_date=days_ago(30))
+    with Ledger(settings.ledger_path) as ledger:
+        result = Pipeline(settings, FakeICloudSession([asset]), ledger).run("run-1")
+
+    assert result.status == "error"
+    assert downloaded == [], "nothing should have been downloaded"
+    assert result.totals.downloaded == 0
+    assert asset.delete_calls == 0
+    assert any("--no-tui" in err for err in result.errors)
+
+
+def test_compatibility_is_checked_once_per_run(make_pipeline, monkeypatch) -> None:
+    """Probing per batch would spawn a subprocess for every batch of a long run."""
+    assets = [
+        FakePhotoAsset(f"a{i}", filename=f"IMG_{i}.HEIC", asset_date=days_ago(30))
+        for i in range(3)
+    ]
+    pipe, _s, _g, _l = make_pipeline(assets)
+    pipe.settings.batch_max_items = 1
+    # Patched after the fixture, which installs its own no-op stub.
+    calls: list[object] = []
+    monkeypatch.setattr(pipeline_module, "verify_compatible", calls.append)
+
+    result = pipe.run("run-1")
+
+    assert result.batches == 3
+    assert len(calls) == 1, "the probe should not run per batch"
+
+
+def test_dry_run_skips_the_compatibility_probe(make_pipeline, monkeypatch) -> None:
+    """A dry run never invokes gotohp, so planning should still work even with an
+    inadequate binary installed."""
+    asset = FakePhotoAsset("a1", filename="IMG_1.HEIC", asset_date=days_ago(30))
+    pipe, _s, _g, _l = make_pipeline([asset], dry_run=True)
+
+    def incompatible(_binary):
+        raise IncompatibleGotohp("too old")
+
+    monkeypatch.setattr(pipeline_module, "verify_compatible", incompatible)
+
+    result = pipe.run("run-1")
+
+    assert result.status == "ok"
+    assert result.totals.planned == 1
