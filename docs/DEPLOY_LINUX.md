@@ -38,12 +38,17 @@ sudo -u i2g /opt/icloud-to-gphotos/bin/gotohp-cli_amd64 creds add '<auth-string>
 
 # 3. iCloud session — interactive, needs the 2FA code from your Apple devices
 cd /opt/icloud-to-gphotos
-sudo -u i2g uv run --frozen i2g login
+sudo -u i2g .venv/bin/i2g login
 
 # 4. Verify, then rehearse
-sudo -u i2g uv run --frozen i2g doctor
-sudo -u i2g uv run --frozen i2g run --dry-run
+sudo -u i2g .venv/bin/i2g doctor
+sudo -u i2g .venv/bin/i2g run --dry-run
 ```
+
+> `cd /opt/icloud-to-gphotos` first: settings are read from `.env` in the current
+> directory. And prefer `.venv/bin/i2g` over `uv run` here — `sudo -u i2g` leaves
+> `HOME` pointing at *your* home, so uv would try to write its cache there as the
+> wrong user and fail. The console script needs no cache at all.
 
 ## About the schedule
 
@@ -90,8 +95,8 @@ systemctl status icloud-to-gphotos.service           # last result
 systemctl cat icloud-to-gphotos.timer                # the effective schedule
 
 cd /opt/icloud-to-gphotos
-sudo -u i2g uv run --frozen i2g status               # ledger progress, stuck items
-sudo -u i2g uv run --frozen i2g report               # last run as JSON
+sudo -u i2g .venv/bin/i2g status                     # ledger progress, stuck items
+sudo -u i2g .venv/bin/i2g report                     # last run as JSON
 ```
 
 Starting or stopping the unit changes system state, so it needs root:
@@ -103,7 +108,7 @@ sudo systemctl stop icloud-to-gphotos.service        # cancel a running pass
 
 > Without `sudo`, systemd tries to escalate through polkit and you get:
 >
-> ```
+> ```text
 > Failed to execute /usr/bin/pkttyagent: No such file or directory
 > Failed to start icloud-to-gphotos.service: Access denied
 > ```
@@ -133,7 +138,7 @@ deliberate. The hardening below (`ProtectSystem=strict`, `ProtectHome=read-only`
 leaves only the state directory writable, and `uv run` wants to take a lock in
 its cache under `$HOME`:
 
-```
+```text
 error: Could not acquire lock
   Caused by: Read-only file system (os error 30) at path "/home/i2g/.cache/uv/.tmpXXXX"
 ```
@@ -182,7 +187,7 @@ just takes more nights.
 
 Budget roughly:
 
-```
+```text
 I2G_BATCH_MAX_BYTES + I2G_DISK_HEADROOM_BYTES + a few GB for the OS
 ```
 
@@ -229,7 +234,7 @@ the 20-hour timeout hits). Progress is in the ledger, so nights compose.
 
 ```bash
 cd /opt/icloud-to-gphotos
-sudo -u i2g screen -S i2g uv run --frozen i2g run
+sudo -u i2g screen -S i2g .venv/bin/i2g run
 ```
 
 Safe to interrupt at any point — the ledger means the next run resumes rather
@@ -242,13 +247,13 @@ needed: the run exits with code 2 and sends an urgent ntfy notification.
 
 ```bash
 cd /opt/icloud-to-gphotos
-sudo -u i2g uv run --frozen i2g login
+sudo -u i2g .venv/bin/i2g login
 ```
 
 To check proactively:
 
 ```bash
-sudo -u i2g uv run --frozen i2g doctor
+sudo -u i2g .venv/bin/i2g doctor
 ```
 
 ## Security notes
