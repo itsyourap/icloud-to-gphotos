@@ -1,6 +1,6 @@
 [project]
 name = "icloud-to-gphotos"
-version = "0.1.4"
+version = "0.1.5"
 description = "Nightly one-way migration of iCloud Photos into Google Photos, with metadata preservation and verified deletion."
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
