@@ -352,8 +352,15 @@ def preservation_signature(
     planned: PlannedAsset, resource: PlannedResource, epoch: str
 ) -> str:
     """Bind metadata evidence to source bytes and required date/GPS values."""
+    # pyicloud decodes locationEnc's plist date into a datetime. Normalise only
+    # that field, preserving the existing JSON-safe receipt format and leaving
+    # the planned location untouched for metadata writers and archives.
+    location = planned.location.copy()
+    timestamp = location.get("timestamp")
+    if isinstance(timestamp, datetime):
+        location["timestamp"] = timestamp.isoformat()
     identity = [1, resource.key, resource.filename, resource.resource.checksum, resource.size,
-                planned.local_date.isoformat(), planned.location,
+                planned.local_date.isoformat(), location,
                 "" if resource.resource.checksum else epoch]
     return hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
 

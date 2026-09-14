@@ -21,7 +21,8 @@ from icloud_to_gphotos.config import Settings
 
 
 def encode_location(
-    latitude: float, longitude: float, altitude: float | None = None
+    latitude: float, longitude: float, altitude: float | None = None,
+    *, timestamp: datetime | None = None,
 ) -> bytes:
     """Encode a GPS fix the way CloudKit delivers ``locationEnc``.
 
@@ -31,6 +32,8 @@ def encode_location(
     payload: dict[str, Any] = {"lat": latitude, "lon": longitude}
     if altitude is not None:
         payload["alt"] = altitude
+    if timestamp is not None:
+        payload["timestamp"] = timestamp
     return base64.b64encode(plistlib.dumps(payload, fmt=plistlib.FMT_BINARY))
 
 

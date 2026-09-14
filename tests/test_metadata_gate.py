@@ -3,13 +3,14 @@
 
 import json
 import subprocess
+from datetime import datetime
 from pathlib import Path
 
 from icloud_to_gphotos import metadata, pipeline
 from icloud_to_gphotos.assets import plan_asset
 from icloud_to_gphotos.metadata import MetadataReport
 
-from .conftest import FakePhotoAsset
+from .conftest import FakePhotoAsset, encode_location
 from .test_pipeline import make_pipeline  # noqa: F401
 
 
@@ -109,3 +110,35 @@ def test_missing_exiftool_retains_heic_source(make_pipeline):
     result = pipe.run('no-tool')
     assert result.status == 'partial'
     assert result.totals.purged_assets == 0
+
+
+def test_gps_timestamp_receipt_survives_restart_and_still_requires_verification(
+    make_pipeline, monkeypatch,
+):
+    timestamp = datetime(2020, 5, 1, 12, 0, 0, 123456)
+    asset = FakePhotoAsset(
+        'gps-timestamp', location=encode_location(1.0, 2.0, 3.0, timestamp=timestamp),
+    )
+    pipe, _, uploader, ledger = make_pipeline([asset])
+    pipe.settings.backfill_metadata = True
+    monkeypatch.setattr(pipeline, 'backfill_batch', lambda *a, **kw: MetadataReport(
+        files_examined=1, errors=['synthetic metadata failure']))
+    failed = pipe.run('unverified-gps')
+    assert failed.status == 'partial'
+    assert not uploader.calls and asset.delete_calls == 0
+    assert ledger.get_resource(asset.id, 'original').state == 'failed'
+
+    def verified(items, **kwargs):
+        assert all(planned.location['timestamp'] == timestamp for planned, _ in items)
+        return MetadataReport(verified_files=[str(path) for _, path in items])
+
+    monkeypatch.setattr(pipeline, 'backfill_batch', verified)
+    pipe.settings.delete_from_icloud = False
+    repaired = pipe.run('verified-gps')
+    assert repaired.status == 'ok' and repaired.totals.uploaded == 1
+
+    restarted, _, uploader, _ = make_pipeline([asset], ledger=ledger)
+    restarted.settings.delete_from_icloud = True
+    final = restarted.run('persisted-gps')
+    assert final.status == 'ok' and final.totals.purged_assets == 1
+    assert final.totals.downloaded == 0 and not uploader.calls

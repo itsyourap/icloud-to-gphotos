@@ -11,6 +11,12 @@ verified and reconfirmed once. Changed inputs invalidate the receipt. Unknown
 content fingerprints require fresh per-run metadata verification. Failure counts
 remain bounded, including checksumless failures.
 
+CloudKit GPS timestamps decode to Python datetimes. Receipt signatures encode
+these as ISO 8601 strings, preserving microseconds and any timezone offset without
+mutating the source location. Existing receipts for locations without timestamps
+remain valid. If an older version stopped with `datetime is not JSON serializable`,
+upgrade and rerun with the same ledger; no reset or metadata opt-out is needed.
+
 Unverified staged files are excluded from upload, and the iCloud asset is kept
 for retry. A verified neighboring asset can still complete. Valid receipts survive
 restarts, but old upload success cannot hide a metadata failure. The run report

@@ -20,7 +20,8 @@ from icloud_to_gphotos.assets import plan_asset
 from icloud_to_gphotos.config import Settings
 from icloud_to_gphotos.metadata import backfill_batch, find_exiftool, probe_files
 
-from .conftest import FakePhotoAsset, encode_location, make_resource
+from .conftest import FakePhotoAsset, FakeService, FakeSession, encode_location, make_resource
+from .test_pipeline import make_pipeline  # noqa: F401
 
 pytestmark = pytest.mark.skipif(
     shutil.which("exiftool") is None,
@@ -109,6 +110,33 @@ def test_writes_and_reads_back_gps_on_a_real_jpeg(settings: Settings, tmp_path: 
     tags = probe_files(exiftool, [media])[str(media)]
     assert float(tags["GPSLatitude"]) == pytest.approx(12.9716, abs=1e-4)
     assert float(tags["GPSLongitude"]) == pytest.approx(77.5946, abs=1e-4)
+
+
+def test_timestamped_gps_completes_real_metadata_verification(
+    make_pipeline, tmp_path: Path,  # noqa: F811
+) -> None:
+    media = tmp_path / "gps.JPG"
+    _minimal_jpeg(media)
+    payload = media.read_bytes()
+    resource = make_resource("original", media.name, size=len(payload), resource_type="public.jpeg")
+    asset = FakePhotoAsset(
+        "timestamped-gps", filename=media.name, resources={"original": resource},
+        location=encode_location(1.0, 2.0, 3.0, timestamp=datetime(2020, 5, 1, 12, 0)),
+        service=FakeService(FakeSession({resource.url: payload})),
+    )
+    pipe, _, _, _ = make_pipeline([asset])
+    pipe.settings.backfill_metadata = True
+    pipe.exiftool = find_exiftool(None)
+    assert pipe.exiftool is not None
+
+    # Real decoder, download, ExifTool write/read-back, receipts and deletion
+    # gate; only remote transport, upload and source deletion are faked.
+    result = pipe.run("timestamped-gps")
+    assert result.status == "ok" and not result.errors
+    assert result.metadata[0]["files_verified"] == 1
+    assert result.metadata[0]["dates_written"] == 1
+    assert result.metadata[0]["gps_written"] == 1
+    assert result.totals.uploaded == 1 and result.totals.purged_assets == 1
 
 
 def _signed_coordinates(exiftool: Path, media: Path) -> tuple[float, float]:
